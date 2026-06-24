@@ -257,38 +257,57 @@ export async function scanReceipt(file) {
       If its not a recipt, return an empty object
     `;
 
+    console.log("Starting receipt scan with Gemini API");
     const result = await model.generateContent([
+      prompt,
       {
         inlineData: {
           data: base64String,
           mimeType: file.type,
         },
       },
-      prompt,
     ]);
 
     const response = await result.response;
-    const text = response.text();
+    const text = await response.text();
+    console.log("Gemini raw response:", text);
+    
     const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
+    console.log("Cleaned response:", cleanedText);
 
     try {
       const data = JSON.parse(cleanedText);
+      console.log("Parsed JSON:", data);
+
+      const amount = typeof data.amount === "number" ? data.amount : parseFloat(data.amount);
+      const dateValue = data.date ? new Date(data.date) : null;
+      const category = typeof data.category === "string" ? data.category : "other-expense";
+      const description = typeof data.description === "string" ? data.description : "";
+      const merchantName = typeof data.merchantName === "string" ? data.merchantName : "";
+
+      if (!amount || isNaN(amount) || !dateValue || isNaN(dateValue.getTime())) {
+        console.error("Invalid receipt data from Gemini:", data);
+        throw new Error("Invalid response format from Gemini");
+      }
+
       return {
-        amount: parseFloat(data.amount),
-        date: new Date(data.date),
-        description: data.description,
-        category: data.category,
-        merchantName: data.merchantName,
+        amount,
+        date: dateValue.toISOString(),
+        description,
+        category,
+        merchantName,
       };
     } catch (parseError) {
-      console.error("Error parsing JSON response:", parseError);
+      console.error("Error parsing JSON response:", parseError, cleanedText);
       throw new Error("Invalid response format from Gemini");
     }
   } catch (error) {
     console.error("Error scanning receipt:", error);
+    console.error("Error details:", error.message, error.stack);
     throw new Error("Failed to scan receipt");
   }
 }
+
 
 // Helper function to calculate next recurring date
 function calculateNextRecurringDate(startDate, interval) {
