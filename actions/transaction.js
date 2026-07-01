@@ -8,8 +8,10 @@ import aj from "@/lib/arcjet";
 import { request } from "@arcjet/next";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash"];
 
 const serializeAmount = (obj) => ({
+
   ...obj,
   amount: obj.amount.toNumber(),
 });
@@ -230,11 +232,9 @@ export async function getUserTransactions(query = {}) {
 // Scan Receipt
 export async function scanReceipt(file) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    // Convert File to ArrayBuffer
+    let result;
+    let model;
     const arrayBuffer = await file.arrayBuffer();
-    // Convert ArrayBuffer to Base64
     const base64String = Buffer.from(arrayBuffer).toString("base64");
 
     const prompt = `
@@ -254,24 +254,40 @@ export async function scanReceipt(file) {
         "category": "string"
       }
 
-      If its not a recipt, return an empty object
+      If it's not a receipt, return an empty object
     `;
 
-    console.log("Starting receipt scan with Gemini API");
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          data: base64String,
-          mimeType: file.type,
-        },
-      },
-    ]);
+    for (const modelName of GEMINI_MODELS) {
+      try {
+        model = genAI.getGenerativeModel({ model: modelName });
+        result = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              data: base64String,
+              mimeType: file.type,
+            },
+          },
+        ]);
+        break;
+      } catch (innerError) {
+        if (/404|Not Found|not found/i.test(innerError.message)) {
+          console.warn(`Model ${modelName} not available, trying next candidate.`);
+          continue;
+        }
+        throw innerError;
+      }
+    }
+
+    if (!result) {
+      console.error("No supported Gemini model available for receipt scanning.");
+      throw new Error("No supported Gemini model available");
+    }
 
     const response = await result.response;
     const text = await response.text();
     console.log("Gemini raw response:", text);
-    
+
     const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
     console.log("Cleaned response:", cleanedText);
 
