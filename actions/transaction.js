@@ -8,7 +8,30 @@ import aj from "@/lib/arcjet";
 import { request } from "@arcjet/next";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash"];
+const GEMINI_MODELS =  ["gemini-2.5-flash"];
+
+const isGeminiQuotaError = (error) => {
+  const message = error?.message || "";
+  return /429|quota|too many requests|rate limit|exceeded your current quota|free tier/i.test(message);
+};
+
+const getFriendlyGeminiErrorMessage = (error) => {
+  const message = error?.message || "";
+
+  if (isGeminiQuotaError(error)) {
+    return "Receipt scanning is temporarily unavailable because the Gemini API quota has been exceeded. Please try again later or add billing to your Gemini API account.";
+  }
+
+  if (/image|inline data|unable to process/i.test(message)) {
+    return "The uploaded receipt image could not be processed. Please try a clearer photo or a different image file.";
+  }
+
+  if (/invalid response format|json/i.test(message)) {
+    return "The receipt scan returned an unexpected result. Please try again with a clearer image.";
+  }
+
+  return "Failed to scan receipt";
+};
 
 const serializeAmount = (obj) => ({
 
@@ -275,6 +298,11 @@ export async function scanReceipt(file) {
           console.warn(`Model ${modelName} not available, trying next candidate.`);
           continue;
         }
+
+        if (isGeminiQuotaError(innerError)) {
+          throw innerError;
+        }
+
         throw innerError;
       }
     }
@@ -320,7 +348,7 @@ export async function scanReceipt(file) {
   } catch (error) {
     console.error("Error scanning receipt:", error);
     console.error("Error details:", error.message, error.stack);
-    throw new Error("Failed to scan receipt");
+    throw new Error(getFriendlyGeminiErrorMessage(error));
   }
 }
 
