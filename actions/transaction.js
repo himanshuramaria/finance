@@ -8,8 +8,33 @@ import aj from "@/lib/arcjet";
 import { request } from "@arcjet/next";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const GEMINI_MODELS =  ["gemini-2.5-flash"];
+
+const isGeminiQuotaError = (error) => {
+  const message = error?.message || "";
+  return /429|quota|too many requests|rate limit|exceeded your current quota|free tier/i.test(message);
+};
+
+const getFriendlyGeminiErrorMessage = (error) => {
+  const message = error?.message || "";
+
+  if (isGeminiQuotaError(error)) {
+    return "Receipt scanning is temporarily unavailable because the Gemini API quota has been exceeded. Please try again later or add billing to your Gemini API account.";
+  }
+
+  if (/image|inline data|unable to process/i.test(message)) {
+    return "The uploaded receipt image could not be processed. Please try a clearer photo or a different image file.";
+  }
+
+  if (/invalid response format|json/i.test(message)) {
+    return "The receipt scan returned an unexpected result. Please try again with a clearer image.";
+  }
+
+  return "Failed to scan receipt";
+};
 
 const serializeAmount = (obj) => ({
+
   ...obj,
   amount: obj.amount.toNumber(),
 });
@@ -230,11 +255,9 @@ export async function getUserTransactions(query = {}) {
 // Scan Receipt
 export async function scanReceipt(file) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    // Convert File to ArrayBuffer
+    let result;
+    let model;
     const arrayBuffer = await file.arrayBuffer();
-    // Convert ArrayBuffer to Base64
     const base64String = Buffer.from(arrayBuffer).toString("base64");
 
     const prompt = `
@@ -254,41 +277,81 @@ export async function scanReceipt(file) {
         "category": "string"
       }
 
-      If its not a recipt, return an empty object
+      If it's not a receipt, return an empty object
     `;
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          data: base64String,
-          mimeType: file.type,
-        },
-      },
-      prompt,
-    ]);
+    for (const modelName of GEMINI_MODELS) {
+      try {
+        model = genAI.getGenerativeModel({ model: modelName });
+        result = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              data: base64String,
+              mimeType: file.type,
+            },
+          },
+        ]);
+        break;
+      } catch (innerError) {
+        if (/404|Not Found|not found/i.test(innerError.message)) {
+          console.warn(`Model ${modelName} not available, trying next candidate.`);
+          continue;
+        }
+
+        if (isGeminiQuotaError(innerError)) {
+          throw innerError;
+        }
+
+        throw innerError;
+      }
+    }
+
+    if (!result) {
+      console.error("No supported Gemini model available for receipt scanning.");
+      throw new Error("No supported Gemini model available");
+    }
 
     const response = await result.response;
-    const text = response.text();
+    const text = await response.text();
+    console.log("Gemini raw response:", text);
+
     const cleanedText = text.replace(/```(?:json)?\n?/g, "").trim();
+    console.log("Cleaned response:", cleanedText);
 
     try {
       const data = JSON.parse(cleanedText);
+      console.log("Parsed JSON:", data);
+
+      const amount = typeof data.amount === "number" ? data.amount : parseFloat(data.amount);
+      const dateValue = data.date ? new Date(data.date) : null;
+      const category = typeof data.category === "string" ? data.category : "other-expense";
+      const description = typeof data.description === "string" ? data.description : "";
+      const merchantName = typeof data.merchantName === "string" ? data.merchantName : "";
+
+      if (!amount || isNaN(amount) || !dateValue || isNaN(dateValue.getTime())) {
+        console.error("Invalid receipt data from Gemini:", data);
+        throw new Error("Invalid response format from Gemini");
+      }
+
       return {
-        amount: parseFloat(data.amount),
-        date: new Date(data.date),
-        description: data.description,
-        category: data.category,
-        merchantName: data.merchantName,
+        amount,
+        date: dateValue.toISOString(),
+        description,
+        category,
+        merchantName,
       };
     } catch (parseError) {
-      console.error("Error parsing JSON response:", parseError);
+      console.error("Error parsing JSON response:", parseError, cleanedText);
       throw new Error("Invalid response format from Gemini");
     }
   } catch (error) {
     console.error("Error scanning receipt:", error);
-    throw new Error("Failed to scan receipt");
+    console.error("Error details:", error.message, error.stack);
+    throw new Error(getFriendlyGeminiErrorMessage(error));
   }
 }
+
 
 // Helper function to calculate next recurring date
 function calculateNextRecurringDate(startDate, interval) {
