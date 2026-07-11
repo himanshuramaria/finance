@@ -3,7 +3,7 @@ import { defineConfig, env } from "prisma";
 export default defineConfig({
   datasources: {
     db: {
-      url: env("DATABASE_URL"),
+      url: env("DATABASE_URL"),prisma.config.ts.bak
       directUrl: env("DIRECT_URL"),
     },
   },
