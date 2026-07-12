@@ -330,7 +330,7 @@ M.Tech AI & Data Science • MNNIT Allahabad
 
 GitHub: https://github.com/himanshuramaria
 
-LinkedIn: *(Add your profile link here)*
+LinkedIn: https://www.linkedin.com/in/himanshu-ramaria/
 
 ---
 
